@@ -1,0 +1,40 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: outbox-postgres
+    environment:
+      POSTGRES_USER: outbox
+      POSTGRES_PASSWORD: outbox
+      POSTGRES_DB: orders_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      # creates notifications_db on first start (each service owns its own database)
+      - ./docker/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U outbox -d orders_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    container_name: outbox-rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: outbox
+      RABBITMQ_DEFAULT_PASS: outbox
+    ports:
+      - "5672:5672"   # AMQP
+      - "15672:15672" # Management UI -> http://localhost:15672 (outbox / outbox)
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  postgres-data:
+  rabbitmq-data:

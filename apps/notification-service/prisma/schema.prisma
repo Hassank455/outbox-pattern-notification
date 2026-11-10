@@ -1,0 +1,29 @@
+// notification-service owns notifications_db.
+// Stage 4 will add the ProcessedMessage (inbox) model for idempotency.
+
+generator client {
+  provider     = "prisma-client"
+  output       = "../src/generated/prisma"
+  moduleFormat = "cjs"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum NotificationChannel {
+  EMAIL
+  SMS
+}
+
+model Notification {
+  id        String              @id @default(uuid()) @db.Uuid
+  orderId   String              @map("order_id") @db.Uuid
+  recipient String
+  channel   NotificationChannel @default(EMAIL)
+  subject   String
+  body      String
+  sentAt    DateTime            @default(now()) @map("sent_at")
+
+  @@map("notifications")
+}

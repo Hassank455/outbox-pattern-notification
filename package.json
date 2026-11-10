@@ -1,0 +1,19 @@
+{
+  "name": "outbox-pattern-notification",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Learning project: Transactional Outbox Pattern with NestJS, Prisma, PostgreSQL and RabbitMQ",
+  "workspaces": [
+    "apps/*"
+  ],
+  "scripts": {
+    "infra:up": "docker compose up -d",
+    "infra:down": "docker compose down",
+    "infra:reset": "docker compose down -v",
+    "prisma:generate": "npm run prisma:generate --workspaces",
+    "prisma:migrate": "npm run prisma:migrate --workspaces",
+    "build": "npm run build --workspaces",
+    "dev:orders": "npm run start:dev -w orders-service",
+    "dev:notification": "npm run start:dev -w notification-service"
+  }
+}

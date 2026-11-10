@@ -1,0 +1,31 @@
+// orders-service owns orders_db.
+// Stage 2 will add the OutboxMessage model here.
+
+generator client {
+  provider     = "prisma-client"
+  output       = "../src/generated/prisma"
+  moduleFormat = "cjs"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum OrderStatus {
+  PENDING
+  CONFIRMED
+  CANCELLED
+}
+
+model Order {
+  id            String      @id @default(uuid()) @db.Uuid
+  customerEmail String      @map("customer_email")
+  product       String
+  quantity      Int
+  totalCents    Int         @map("total_cents")
+  status        OrderStatus @default(PENDING)
+  createdAt     DateTime    @default(now()) @map("created_at")
+  updatedAt     DateTime    @updatedAt @map("updated_at")
+
+  @@map("orders")
+}
