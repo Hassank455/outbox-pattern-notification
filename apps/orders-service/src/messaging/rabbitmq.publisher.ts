@@ -7,8 +7,9 @@ import { ORDERS_EXCHANGE } from './messaging.constants';
  * Publishes events to RabbitMQ using a *confirm channel*:
  * `publish()` only resolves once the broker says it has taken the message.
  *
- * Stage 1 note: this is the "naive" publisher. It is called right after the
- * order is saved, outside the database transaction. That is the bug we study.
+ * Stage 1 called this straight from the request path (the dual-write bug).
+ * Since Stage 2 nothing calls it: events wait in the outbox table, and the
+ * Stage 3 relay will use this publisher to send them.
  */
 @Injectable()
 export class RabbitMqPublisher implements OnModuleInit, OnModuleDestroy {

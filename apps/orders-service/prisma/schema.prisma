@@ -1,5 +1,4 @@
 // orders-service owns orders_db.
-// Stage 2 will add the OutboxMessage model here.
 
 generator client {
   provider     = "prisma-client"
@@ -28,4 +27,32 @@ model Order {
   updatedAt     DateTime    @updatedAt @map("updated_at")
 
   @@map("orders")
+}
+
+enum OutboxStatus {
+  PENDING
+  PUBLISHED
+  FAILED
+}
+
+// Stage 2: the transactional outbox.
+// A row here means "this event happened and still has to reach RabbitMQ".
+// It is written in the SAME transaction as the business change (the order),
+// so either both exist or neither does.
+model OutboxMessage {
+  id            String       @id @default(uuid()) @db.Uuid // = event id, sent as the AMQP messageId
+  aggregateType String       @map("aggregate_type") // e.g. "Order"
+  aggregateId   String       @map("aggregate_id") @db.Uuid // which order this event is about
+  eventType     String       @map("event_type") // e.g. "order.created"
+  routingKey    String       @map("routing_key") // where the relay will publish it
+  payload       Json // the event body, frozen at the moment it happened
+  status        OutboxStatus @default(PENDING)
+  attempts      Int          @default(0) // publish attempts so far (used by the Stage 3 relay)
+  lastError     String?      @map("last_error") // why the last attempt failed
+  createdAt     DateTime     @default(now()) @map("created_at")
+  publishedAt   DateTime?    @map("published_at")
+
+  // the relay's query: "oldest PENDING rows first"
+  @@index([status, createdAt])
+  @@map("outbox_messages")
 }

@@ -1,5 +1,8 @@
 # Stage 1: The naive way (dual write)
 
+> The code for this stage is in commit `85dfd7e`. Stage 2 replaced the `?fail=` switches,
+> so run `git checkout 85dfd7e` to repeat these experiments, and `git checkout main` to come back.
+
 ## What we built
 
 **orders-service**

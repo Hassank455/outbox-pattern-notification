@@ -1,12 +1,12 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { randomUUID } from 'node:crypto';
-import { RabbitMqPublisher } from '../messaging/rabbitmq.publisher';
 import { ORDER_CREATED_ROUTING_KEY } from '../messaging/messaging.constants';
+import { Order } from '../generated/prisma/client';
+import { OutboxService } from '../outbox/outbox.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateOrderDto } from './dto/create-order.dto';
 import { OrderCreatedEvent } from './order-created.event';
 
-export type FailureMode = 'crash-after-save' | 'publish-before-save';
+export type FailureMode = 'fail-inside-transaction' | 'crash-after-commit';
 
 @Injectable()
 export class OrdersService {
@@ -14,77 +14,66 @@ export class OrdersService {
 
   constructor(
     private readonly prisma: PrismaService,
-    private readonly publisher: RabbitMqPublisher,
+    private readonly outbox: OutboxService,
   ) {}
 
   /**
-   * STAGE 1: THE NAIVE WAY ("dual write").
+   * STAGE 2: TRANSACTIONAL OUTBOX.
    *
-   *   1. INSERT the order        -> Postgres commits
-   *   2. publish order.created   -> RabbitMQ
+   *   BEGIN
+   *     INSERT INTO orders ...
+   *     INSERT INTO outbox_messages ... ('order.created', PENDING)
+   *   COMMIT
    *
-   * Two separate systems, no shared transaction. Anything that goes wrong
-   * between step 1 and step 2 leaves them disagreeing. `failure` lets you
-   * trigger that on purpose (see docs/01-naive-publish.md).
+   * One database, one transaction: the order and "an order was created" are
+   * saved together or not at all. RabbitMQ is no longer on the request path,
+   * so a broker outage can't fail the request or lose the event.
+   * Nobody publishes the outbox rows yet: that's the relay, in Stage 3.
    */
   async create(dto: CreateOrderDto, failure?: FailureMode) {
-    if (failure === 'publish-before-save') {
-      return this.createPublishingFirst(dto);
-    }
+    const order = await this.prisma.$transaction(async (tx) => {
+      const order = await tx.order.create({
+        data: {
+          customerEmail: dto.customerEmail,
+          product: dto.product,
+          quantity: dto.quantity,
+          totalCents: dto.quantity * dto.unitPriceCents,
+        },
+      });
 
-    const order = await this.prisma.order.create({
-      data: {
-        customerEmail: dto.customerEmail,
-        product: dto.product,
-        quantity: dto.quantity,
-        totalCents: dto.quantity * dto.unitPriceCents,
-      },
+      const message = await this.outbox.enqueue(tx, {
+        aggregateType: 'Order',
+        aggregateId: order.id,
+        eventType: ORDER_CREATED_ROUTING_KEY,
+        routingKey: ORDER_CREATED_ROUTING_KEY,
+        payload: { ...this.toEvent(order) },
+      });
+
+      if (failure === 'fail-inside-transaction') {
+        // Both INSERTs already ran. Throwing here makes Prisma send ROLLBACK:
+        // neither the order nor the outbox row survives.
+        this.logger.error(`💥 simulating a failure inside the transaction (order ${order.id}, outbox ${message.id})`);
+        throw new Error(`simulated failure after writing order ${order.id} and outbox row ${message.id}`);
+      }
+
+      return order;
     });
-    this.logger.log(`order ${order.id} saved`);
+    this.logger.log(`order ${order.id} + outbox row committed together`);
 
-    if (failure === 'crash-after-save') {
-      this.logger.error(`💥 simulating a crash after saving order ${order.id}, before publishing`);
+    if (failure === 'crash-after-commit') {
+      // In Stage 1 this exact crash lost the event. Now the event is safe in the outbox.
+      this.logger.error(`💥 simulating a crash right after committing order ${order.id}`);
       process.exit(1);
     }
 
-    // If RabbitMQ is down, this throws: the order is already committed, the event is lost,
-    // and the client gets a 500 for an order that actually exists.
-    const messageId = await this.publisher.publish(ORDER_CREATED_ROUTING_KEY, this.toEvent(order));
-    this.logger.log(`order.created published for ${order.id} (message ${messageId})`);
     return order;
-  }
-
-  /** The "fix" people try first: publish, then save. Now a failed INSERT leaves a phantom event. */
-  private async createPublishingFirst(dto: CreateOrderDto) {
-    const id = randomUUID();
-    const createdAt = new Date();
-    const totalCents = dto.quantity * dto.unitPriceCents;
-    await this.publisher.publish(ORDER_CREATED_ROUTING_KEY, {
-      orderId: id,
-      customerEmail: dto.customerEmail,
-      product: dto.product,
-      quantity: dto.quantity,
-      totalCents,
-      createdAt: createdAt.toISOString(),
-    } satisfies OrderCreatedEvent);
-    this.logger.log(`order.created published for ${id}, now saving...`);
-
-    this.logger.error(`💥 simulating a failed INSERT for order ${id}, after publishing`);
-    throw new Error(`database write failed for order ${id} (simulated)`);
   }
 
   findAll() {
     return this.prisma.order.findMany({ orderBy: { createdAt: 'desc' }, take: 50 });
   }
 
-  private toEvent(order: {
-    id: string;
-    customerEmail: string;
-    product: string;
-    quantity: number;
-    totalCents: number;
-    createdAt: Date;
-  }): OrderCreatedEvent {
+  private toEvent(order: Order): OrderCreatedEvent {
     return {
       orderId: order.id,
       customerEmail: order.customerEmail,
