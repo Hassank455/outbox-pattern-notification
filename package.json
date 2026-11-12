@@ -14,6 +14,7 @@
     "prisma:migrate": "npm run prisma:migrate --workspaces",
     "build": "npm run build --workspaces",
     "dev:orders": "npm run start:dev -w orders-service",
-    "dev:notification": "npm run start:dev -w notification-service"
+    "dev:notification": "npm run start:dev -w notification-service",
+    "relay": "npm run relay -w orders-service"
   }
 }

@@ -3,13 +3,26 @@ import { ChannelModel, ConfirmChannel, connect } from 'amqplib';
 import { randomUUID } from 'node:crypto';
 import { ORDERS_EXCHANGE } from './messaging.constants';
 
+const CONFIRM_TIMEOUT_MS = 10_000;
+
+export interface PublishOptions {
+  /** Defaults to a random UUID. The relay passes the outbox row id, so the consumer can de-duplicate (Stage 4). */
+  messageId?: string;
+  /** When the event happened. Defaults to now. */
+  timestamp?: Date;
+}
+
 /**
  * Publishes events to RabbitMQ using a *confirm channel*:
  * `publish()` only resolves once the broker says it has taken the message.
  *
  * Stage 1 called this straight from the request path (the dual-write bug).
- * Since Stage 2 nothing calls it: events wait in the outbox table, and the
- * Stage 3 relay will use this publisher to send them.
+ * Since Stage 2 the request path only writes to the outbox, and since Stage 3
+ * the OutboxRelay is the only caller.
+ *
+ * Connection handling: connects lazily, and after the connection drops
+ * (broker restart, network blip) the next publish reconnects. A failed
+ * connect just throws; it never crashes the app.
  */
 @Injectable()
 export class RabbitMqPublisher implements OnModuleInit, OnModuleDestroy {
@@ -22,7 +35,7 @@ export class RabbitMqPublisher implements OnModuleInit, OnModuleDestroy {
     try {
       await this.getChannel();
     } catch (err) {
-      // Don't block startup: the service can still take orders (and lose events, see Stage 1 docs).
+      // Don't block startup: orders are still accepted, events wait in the outbox.
       this.logger.warn(`RabbitMQ not reachable at startup: ${(err as Error).message}`);
     }
   }
@@ -31,17 +44,41 @@ export class RabbitMqPublisher implements OnModuleInit, OnModuleDestroy {
     await this.connection?.close().catch(() => undefined);
   }
 
-  async publish(routingKey: string, payload: unknown): Promise<string> {
+  /** Opens the connection if needed. Throws if the broker is unreachable. */
+  async ensureConnected(): Promise<void> {
+    await this.getChannel();
+  }
+
+  async publish(routingKey: string, payload: unknown, options: PublishOptions = {}): Promise<string> {
     const channel = await this.getChannel();
-    const messageId = randomUUID();
-    channel.publish(ORDERS_EXCHANGE, routingKey, Buffer.from(JSON.stringify(payload)), {
-      messageId,
-      type: routingKey,
-      contentType: 'application/json',
-      persistent: true, // survive a broker restart (queue must be durable too)
-      timestamp: Math.floor(Date.now() / 1000),
+    const messageId = options.messageId ?? randomUUID();
+    const timestamp = options.timestamp ?? new Date();
+
+    // Wait for this message's own confirm (ack/nack) from the broker, with a timeout
+    // so a stuck broker can't hang the caller forever.
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(
+        () => reject(new Error(`no confirm from RabbitMQ within ${CONFIRM_TIMEOUT_MS}ms`)),
+        CONFIRM_TIMEOUT_MS,
+      );
+      channel.publish(
+        ORDERS_EXCHANGE,
+        routingKey,
+        Buffer.from(JSON.stringify(payload)),
+        {
+          messageId,
+          type: routingKey,
+          contentType: 'application/json',
+          persistent: true, // survive a broker restart (queue must be durable too)
+          timestamp: Math.floor(timestamp.getTime() / 1000),
+        },
+        (err) => {
+          clearTimeout(timer);
+          if (err) reject(err instanceof Error ? err : new Error('RabbitMQ rejected (nacked) the message'));
+          else resolve();
+        },
+      );
     });
-    await channel.waitForConfirms();
     return messageId;
   }
 

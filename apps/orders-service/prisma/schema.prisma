@@ -47,12 +47,15 @@ model OutboxMessage {
   routingKey    String       @map("routing_key") // where the relay will publish it
   payload       Json // the event body, frozen at the moment it happened
   status        OutboxStatus @default(PENDING)
-  attempts      Int          @default(0) // publish attempts so far (used by the Stage 3 relay)
+  attempts      Int          @default(0) // publish attempts so far
   lastError     String?      @map("last_error") // why the last attempt failed
+  nextAttemptAt DateTime?    @map("next_attempt_at") // Stage 3: retry not before this time (null = ready now)
   createdAt     DateTime     @default(now()) @map("created_at")
   publishedAt   DateTime?    @map("published_at")
 
   // the relay's query: "oldest PENDING rows first"
   @@index([status, createdAt])
+  // the relay skips rows still waiting for their retry time
+  @@index([status, nextAttemptAt])
   @@map("outbox_messages")
 }

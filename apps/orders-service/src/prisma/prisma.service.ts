@@ -5,7 +5,11 @@ import { PrismaClient } from '../generated/prisma/client';
 @Injectable()
 export class PrismaService extends PrismaClient implements OnModuleInit, OnModuleDestroy {
   constructor() {
-    super({ adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL }) });
+    super({
+      adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL }),
+      // PRISMA_LOG_QUERIES=true prints every SQL statement, including BEGIN / COMMIT / ROLLBACK.
+      log: process.env.PRISMA_LOG_QUERIES === 'true' ? ['query'] : [],
+    });
   }
 
   async onModuleInit() {
