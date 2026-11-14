@@ -13,6 +13,8 @@ export type HandleResult = 'processed' | 'duplicate';
 @Injectable()
 export class NotificationsService {
   private readonly simulatedFailureRate = Math.min(1, Number(process.env.CONSUMER_SIMULATED_FAILURE_RATE ?? 0) || 0);
+  /** Experiments only (Stage 5): skip the inbox check to watch duplicates come back. Never in production. */
+  private readonly inboxDisabled = process.env.CONSUMER_DISABLE_INBOX === 'true';
 
   constructor(private readonly prisma: PrismaService) {}
 
@@ -49,7 +51,7 @@ export class NotificationsService {
         skipDuplicates: true, // ON CONFLICT DO NOTHING: a duplicate doesn't abort the transaction
       });
 
-      if (count === 0) {
+      if (count === 0 && !this.inboxDisabled) {
         await tx.processedMessage.update({
           where: { messageId: meta.messageId },
           data: { duplicateDeliveries: { increment: 1 }, lastDuplicateAt: new Date() },

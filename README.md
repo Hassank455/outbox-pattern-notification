@@ -35,7 +35,7 @@ to notify the customer, without losing or inventing events, and without distribu
 | 2 | Outbox table, written in the same transaction as the order | ✅ |
 | 3 | Polling relay with `FOR UPDATE SKIP LOCKED`, batching, retries with backoff | ✅ |
 | 4 | Notification consumer: inbox table for idempotency, manual ack, DLQ | ✅ |
-| 5 | Failure experiments: crashes, duplicates, multiple relay instances | ⏳ |
+| 5 | Failure experiments: crashes, duplicates, multiple relay instances | ✅ |
 | 6 | (Optional) Alternative relays: Postgres `LISTEN/NOTIFY`, Debezium CDC | ⏳ |
 
 Notes for each stage live in [`docs/`](./docs).
@@ -49,6 +49,7 @@ Notes for each stage live in [`docs/`](./docs).
 ├── apps/
 │   ├── orders-service/         # port 3001, owns orders_db
 │   └── notification-service/   # port 3002, owns notifications_db
+├── scripts/                    # chaos.mjs (failure experiment), trace.mjs (one order's journey)
 └── docs/                       # learning notes per stage
 ```
 
@@ -79,6 +80,10 @@ npm run dev:notification
 
 # optional: extra outbox relays as separate processes (Stage 3)
 npm run relay
+
+# Stage 5: chaos experiment (stop dev:orders first) and one order's journey
+npm run chaos
+npm run trace -- <orderId>
 ```
 
 Check it works:

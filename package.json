@@ -15,6 +15,12 @@
     "build": "npm run build --workspaces",
     "dev:orders": "npm run start:dev -w orders-service",
     "dev:notification": "npm run start:dev -w notification-service",
-    "relay": "npm run relay -w orders-service"
+    "relay": "npm run relay -w orders-service",
+    "chaos": "node scripts/chaos.mjs",
+    "trace": "node scripts/trace.mjs"
+  },
+  "devDependencies": {
+    "dotenv": "^16.6.1",
+    "pg": "^8.23.1"
   }
 }
