@@ -34,7 +34,7 @@ to notify the customer, without losing or inventing events, and without distribu
 | 1 | The naive way: save order, then publish directly. Break it on purpose | ✅ |
 | 2 | Outbox table, written in the same transaction as the order | ✅ |
 | 3 | Polling relay with `FOR UPDATE SKIP LOCKED`, batching, retries with backoff | ✅ |
-| 4 | Notification consumer: inbox table for idempotency, manual ack, DLQ | ⏳ |
+| 4 | Notification consumer: inbox table for idempotency, manual ack, DLQ | ✅ |
 | 5 | Failure experiments: crashes, duplicates, multiple relay instances | ⏳ |
 | 6 | (Optional) Alternative relays: Postgres `LISTEN/NOTIFY`, Debezium CDC | ⏳ |
 

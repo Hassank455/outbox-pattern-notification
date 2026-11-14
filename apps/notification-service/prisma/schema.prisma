@@ -1,5 +1,4 @@
 // notification-service owns notifications_db.
-// Stage 4 will add the ProcessedMessage (inbox) model for idempotency.
 
 generator client {
   provider     = "prisma-client"
@@ -26,4 +25,19 @@ model Notification {
   sentAt    DateTime            @default(now()) @map("sent_at")
 
   @@map("notifications")
+}
+
+// Stage 4: the inbox. One row per message we have already handled.
+// Written in the SAME transaction as the notification, so "handled" and
+// "notification stored" can't disagree. A second delivery of the same
+// messageId finds the row and is skipped.
+model ProcessedMessage {
+  messageId           String    @id @map("message_id") // AMQP messageId = orders-service outbox id
+  messageType         String    @map("message_type") // e.g. "order.created"
+  receivedAt          DateTime  @map("received_at") // when the consumer got the first delivery
+  processedAt         DateTime  @default(now()) @map("processed_at") // when that delivery was committed
+  duplicateDeliveries Int       @default(0) @map("duplicate_deliveries") // later deliveries we skipped
+  lastDuplicateAt     DateTime? @map("last_duplicate_at")
+
+  @@map("processed_messages")
 }
