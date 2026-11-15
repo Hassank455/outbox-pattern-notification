@@ -65,7 +65,7 @@ The relay logs show the LISTEN connections dropping when Postgres stopped
 (`terminating connection due to administrator command`), retrying while it was down, reconnecting, and sweeping.
 No events were missed.
 
-## B) Debezium CDC (experimental)
+## B) Debezium CDC (works; optional, compose profile `cdc`)
 
 ### The idea
 
@@ -101,19 +101,44 @@ Stop it and **clean up the replication slot**, otherwise Postgres keeps WAL for 
 ```bash
 docker compose --profile cdc stop debezium
 docker exec outbox-postgres psql -U outbox -d orders_db -c "select pg_drop_replication_slot('debezium_outbox')"
+# optional full reset: forget Debezium's offsets too
+docker compose --profile cdc rm -f debezium && docker volume rm outbox-pattern-notification_debezium-data
 ```
 
-### Status on the dev Mac
+### Results on the dev Mac
 
-⚠️ **Not run yet.** The config is written and `docker compose --profile cdc config` validates, Postgres runs with
-`wal_level=logical`, and the consumer's `id`-header fallback is in place, but the Debezium Server image (~576MB)
-couldn't be downloaded on the dev Mac: Docker Desktop's proxy kept failing (`unexpected EOF`,
-`lookup quay.io: no such host`). Treat this part as **experimental and untested** until the end-to-end check below passes.
+It works end to end, with the relay off (`RELAY_MODE=none`) and notification-service unchanged except for the header fallback.
 
-To check it once the image is there: start it as above, create a few orders, and confirm
-`GET localhost:3002/notifications/stats` counts one notification per order. Then
-`docker compose --profile cdc restart debezium` and create more orders: re-sent events should show up as
-`duplicateDeliveriesSkipped`, never as extra notifications.
+| Test | Result |
+|---|---|
+| 20 orders | 20 notifications; the 20 inbox `message_id`s are exactly the 20 outbox ids |
+| 600 orders, `docker kill` (SIGKILL) Debezium mid-stream, start it again 3s later | **600 → 600 notifications**, 0 missing, 0 duplicates (it resumed from its saved offset) |
+| `npm run latency -- --modes=none`, 200 orders @ 20/s, default settings | end-to-end p50 **417ms**, p95 676ms |
+| same, with `debezium.source.poll.interval.ms=50` | end-to-end p50 **77ms**, p95 123ms, max 149ms |
+
+What a Debezium message looks like in RabbitMQ (routing key `order.created`):
+
+```
+properties: delivery_mode 2, NO message_id
+headers:    id = "\"cd736605-…\""   ← the outbox id, JSON-encoded
+            eventType = "\"order.created\"", __debezium.context.* = …
+body:       {"orderId":"86f28c11-…","product":"Peek","quantity":1,"totalCents":100,…}   ← the payload column
+```
+
+So Debezium **can't set the AMQP `messageId`**. The consumer's fallback (read the `id` header and JSON-decode it)
+is what keeps the inbox working.
+
+Getting there took three config fixes, all now in `application.properties`:
+1. `route.topic.replacement=${routedByValue}` crashed Debezium Server at startup with a `NullPointerException`:
+   Quarkus tries to expand `${…}` as one of its own config variables. It must be escaped: `\\${routedByValue}`.
+2. `table.op.invalid.behavior` accepts only `warn | error | fatal` (`debug` failed with a `ConfigException`).
+3. `routingKeyFromTopicName=true` is deprecated → `routingKey.source=topic`.
+
+Plus one tuning fix: Debezium Server hands changes to the sink every `poll.interval.ms` (500ms by default), which
+was most of the 417ms. At 50ms the latency drops to ~77ms.
+
+After testing, Debezium was stopped, its replication slot and publication were dropped, and its offsets volume was
+removed, so the dev setup is back to plain polling.
 
 ### Things to know about CDC with this schema
 
@@ -129,7 +154,7 @@ To check it once the image is there: start it as above, create a few orders, and
 
 | | Polling (Stage 3) | LISTEN/NOTIFY (Stage 6A) | CDC / Debezium (Stage 6B) |
 |---|---|---|---|
-| Latency | up to 1 interval (p50 610ms at 1s) | ~15ms p50 | low (log streaming), not measured here |
+| Latency (e2e p50) | 610ms (up to 1 interval) | **15ms** | 417ms by default, **77ms** with `poll.interval.ms=50` |
 | DB load when idle | 1 query per interval per relay (62/min) | ~0 (3/min with a 30s fallback) | none on the table; reads the WAL |
 | DB load under load | one query per batch: efficient | one per wake-up; coalesces in bursts | none on the table |
 | Durability of the trigger | n/a: the table *is* the queue | NOTIFY is lost if not listening → needs sweep + fallback poll | WAL + replication slot: nothing missed, even after downtime |

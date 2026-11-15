@@ -7,6 +7,7 @@
 //
 //   npm run latency                              # polling vs notify, 200 orders @ 20/s, then 20s idle
 //   npm run latency -- --modes=notify --orders=500 --rate=50
+//   npm run latency -- --modes=none             # with Debezium running (CDC publishes, our relay is off)
 //
 // Stop your own `npm run dev:*` processes first (port 3001 must be free).
 import { execFile, spawn } from 'node:child_process';
@@ -55,7 +56,7 @@ async function waitHealthy(port) {
   throw new Error(`port ${port} never became healthy (logs in ${LOG_DIR})`);
 }
 const pct = (sorted, p) => sorted[Math.min(sorted.length - 1, Math.floor((p / 100) * sorted.length))];
-const fmt = (ms) => (ms >= 1000 ? `${(ms / 1000).toFixed(2)}s` : `${Math.round(ms)}ms`);
+const fmt = (ms) => (ms === undefined || Number.isNaN(ms) ? '–' : ms >= 1000 ? `${(ms / 1000).toFixed(2)}s` : `${Math.round(ms)}ms`);
 
 async function runMode(mode) {
   const email = `latency-${mode}-${RUN_ID}@example.com`;
@@ -128,7 +129,7 @@ try {
   for (const r of results) {
     console.log(
       `| ${r.mode} | ${r.orders} → ${r.notified} | ${fmt(r.e2e.p50)} | ${fmt(r.e2e.p95)} | ${fmt(r.e2e.max)} | ` +
-        `${fmt(r.relay.p50)} | ${fmt(r.relay.p95)} | ${r.claims} (${r.empty}) | ${((r.claims / r.seconds) * 60).toFixed(0)} |`,
+        `${fmt(r.relay.p50)} | ${fmt(r.relay.p95)} | ${r.claims ?? '–'} (${r.empty ?? '–'}) | ${r.claims === null ? '–' : ((r.claims / r.seconds) * 60).toFixed(0)} |`,
     );
   }
   console.log(`\nlogs: ${LOG_DIR}`);

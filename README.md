@@ -36,7 +36,7 @@ to notify the customer, without losing or inventing events, and without distribu
 | 3 | Polling relay with `FOR UPDATE SKIP LOCKED`, batching, retries with backoff | ✅ |
 | 4 | Notification consumer: inbox table for idempotency, manual ack, DLQ | ✅ |
 | 5 | Failure experiments: crashes, duplicates, multiple relay instances | ✅ |
-| 6 | Alternative relays: Postgres `LISTEN/NOTIFY` (`RELAY_MODE=notify`), Debezium CDC (experimental) | ✅ |
+| 6 | Alternative relays: Postgres `LISTEN/NOTIFY` (`RELAY_MODE=notify`), Debezium CDC (`--profile cdc`) | ✅ |
 
 Notes for each stage live in [`docs/`](./docs).
 
@@ -119,8 +119,9 @@ RabbitMQ UI: http://localhost:15672 (user `outbox`, password `outbox`).
    outages all passed "every order → exactly one notification". Turning the inbox off made the same check fail
    with 423 duplicates (Stage 5).
 8. **The relay mechanism is swappable, the guarantees aren't.** LISTEN/NOTIFY cut latency from ~610ms to ~15ms and
-   idle queries from 62/min to 3/min, but needs a fallback poll because NOTIFY isn't durable. CDC removes the relay
-   but adds infrastructure to watch. Delivery stays at-least-once either way (Stage 6).
+   idle queries from 62/min to 3/min, but needs a fallback poll because NOTIFY isn't durable. Debezium CDC removed
+   the relay entirely (~77ms once tuned, survived a SIGKILL with 600 → 600) but adds infrastructure to watch, like
+   replication slots. Delivery stays at-least-once either way (Stage 6).
 9. **What the pattern doesn't give you:** global ordering across relays, exactly-once delivery, or safe external
    side effects (a real email API needs its own idempotency key).
 
