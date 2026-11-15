@@ -6,10 +6,20 @@ function intFromEnv(name: string, fallback: number): number {
   return value;
 }
 
+export type RelayMode = 'polling' | 'notify' | 'none';
+
 export interface RelayConfig {
+  /**
+   * polling: query the outbox every intervalMs (Stage 3).
+   * notify:  wake up on Postgres NOTIFY, plus a slow fallback poll (Stage 6).
+   * none:    no relay in this process (e.g. Debezium CDC publishes instead).
+   */
+  mode: RelayMode;
   enabled: boolean;
-  /** Pause between ticks when there was nothing (or not a full batch) to send. */
+  /** polling mode: pause between ticks when there was nothing (or not a full batch) to send. */
   intervalMs: number;
+  /** notify mode: safety-net poll, for notifications missed while the LISTEN connection was down. */
+  fallbackIntervalMs: number;
   /** Max rows claimed per transaction. */
   batchSize: number;
   /** After this many failed publishes a row becomes FAILED and is no longer retried. */
@@ -21,10 +31,22 @@ export interface RelayConfig {
   simulatedFailureRate: number;
 }
 
+function modeFromEnv(): RelayMode {
+  if (process.env.RELAY_ENABLED === 'false') return 'none'; // Stage 3 switch, still honoured
+  const mode = (process.env.RELAY_MODE ?? 'polling').toLowerCase();
+  if (mode !== 'polling' && mode !== 'notify' && mode !== 'none') {
+    throw new Error(`RELAY_MODE must be polling, notify or none, got "${process.env.RELAY_MODE}"`);
+  }
+  return mode;
+}
+
 export function loadRelayConfig(): RelayConfig {
+  const mode = modeFromEnv();
   return {
-    enabled: process.env.RELAY_ENABLED !== 'false',
+    mode,
+    enabled: mode !== 'none',
     intervalMs: intFromEnv('RELAY_INTERVAL_MS', 1000),
+    fallbackIntervalMs: intFromEnv('RELAY_FALLBACK_INTERVAL_MS', 30_000),
     batchSize: Math.max(1, intFromEnv('RELAY_BATCH_SIZE', 50)),
     maxAttempts: Math.max(1, intFromEnv('RELAY_MAX_ATTEMPTS', 10)),
     baseBackoffMs: intFromEnv('RELAY_BASE_BACKOFF_MS', 1000),

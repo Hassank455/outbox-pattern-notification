@@ -2,6 +2,9 @@ services:
   postgres:
     image: postgres:16-alpine
     container_name: outbox-postgres
+    # Stage 6: logical WAL so Debezium (CDC) can stream changes. Harmless when Debezium isn't running,
+    # as long as no replication slot is left behind (see docs/06-alternative-relays.md).
+    command: ["postgres", "-c", "wal_level=logical"]
     environment:
       POSTGRES_USER: outbox
       POSTGRES_PASSWORD: outbox
@@ -35,6 +38,22 @@ services:
       timeout: 5s
       retries: 10
 
+  # Stage 6 (experimental): CDC relay. Only starts with: docker compose --profile cdc up -d debezium
+  # Run orders-service with RELAY_MODE=none while it's up, or both will publish every event.
+  debezium:
+    image: quay.io/debezium/server:3.2
+    container_name: outbox-debezium
+    profiles: ["cdc"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    volumes:
+      - ./docker/debezium/conf:/debezium/config:ro
+      - debezium-data:/debezium/data
+
 volumes:
   postgres-data:
   rabbitmq-data:
+  debezium-data:

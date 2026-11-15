@@ -4,6 +4,7 @@
 //   npm run chaos                                   # 500 orders, 3 relays, 2 consumers, kill -9 every ~1s, 1 RabbitMQ restart
 //   npm run chaos -- --orders=2000 --postgres-stop  # bigger, and stop Postgres for a few seconds too
 //   npm run chaos -- --unsafe-consumer              # consumers without the inbox: the check should FAIL
+//   npm run chaos -- --relay-mode=notify            # Stage 6: LISTEN/NOTIFY relays
 //
 // It starts its OWN processes (the API with the relay off, N standalone relays, M notification consumers),
 // sends orders tagged with a run id, kills processes with SIGKILL at random and restarts them, restarts
@@ -23,7 +24,8 @@ const { values: opts } = parseArgs({
     rate: { type: 'string', default: '100' }, // orders per second
     relays: { type: 'string', default: '3' },
     consumers: { type: 'string', default: '2' },
-    'relay-batch': { type: 'string', default: '20' }, // bigger batches = more re-sends when a relay is killed mid-batch
+    'relay-batch': { type: 'string', default: '20' },
+    'relay-mode': { type: 'string', default: 'polling' }, // polling | notify (Stage 6) // bigger batches = more re-sends when a relay is killed mid-batch
     'kill-every': { type: 'string', default: '1000' }, // ms between kills (± 50% jitter)
     'api-port': { type: 'string', default: '3001' },
     'skip-broker-restart': { type: 'boolean', default: false },
@@ -38,6 +40,7 @@ const RATE = Number(opts.rate);
 const N_RELAYS = Number(opts.relays);
 const N_CONSUMERS = Number(opts.consumers);
 const RELAY_BATCH = Number(opts['relay-batch']);
+const RELAY_MODE = opts['relay-mode'];
 const KILL_EVERY = Number(opts['kill-every']);
 const API_PORT = Number(opts['api-port']);
 const API = `http://localhost:${API_PORT}`;
@@ -92,7 +95,7 @@ class Proc {
 const api = new Proc('api', ORDERS_DIR, 'dist/main.js', { PORT: String(API_PORT), RELAY_ENABLED: 'false' }, API_PORT);
 const relays = Array.from(
   { length: N_RELAYS },
-  (_, i) => new Proc(`relay-${i + 1}`, ORDERS_DIR, 'dist/relay.main.js', { RELAY_BATCH_SIZE: String(RELAY_BATCH), RELAY_INTERVAL_MS: '200' }),
+  (_, i) => new Proc(`relay-${i + 1}`, ORDERS_DIR, 'dist/relay.main.js', { RELAY_MODE, RELAY_BATCH_SIZE: String(RELAY_BATCH), RELAY_INTERVAL_MS: '200' }),
 );
 const consumers = Array.from(
   { length: N_CONSUMERS },
@@ -266,7 +269,7 @@ async function main() {
   mkdirSync(LOG_DIR, { recursive: true });
   console.log(`chaos run ${RUN_ID}`);
   console.log(
-    `  ${N_ORDERS} orders @ ${RATE}/s, ${N_RELAYS} relays (batch ${RELAY_BATCH}), ${N_CONSUMERS} consumers, kill -9 every ~${KILL_EVERY}ms` +
+    `  ${N_ORDERS} orders @ ${RATE}/s, ${N_RELAYS} ${RELAY_MODE} relays (batch ${RELAY_BATCH}), ${N_CONSUMERS} consumers, kill -9 every ~${KILL_EVERY}ms` +
       `${opts['skip-broker-restart'] ? '' : ', 1 RabbitMQ restart'}${opts['postgres-stop'] ? ', 1 Postgres stop' : ''}` +
       `${opts['kill-api'] ? ', API is a victim too' : ''}${opts['unsafe-consumer'] ? ', ⚠ INBOX DISABLED' : ''}`,
   );

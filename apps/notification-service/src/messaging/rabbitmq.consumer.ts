@@ -16,6 +16,26 @@ import {
 
 const RECONNECT_DELAY_MS = 5_000;
 
+/**
+ * The event id used for de-duplication. Our relay sets the AMQP `messageId` property.
+ * Debezium's outbox router (Stage 6, CDC) puts it in an `id` header instead, sometimes
+ * JSON-encoded ("\"…\""), so fall back to that.
+ */
+function eventId(msg: ConsumeMessage): string | undefined {
+  if (msg.properties.messageId) return String(msg.properties.messageId);
+  let id: unknown = msg.properties.headers?.id;
+  if (Buffer.isBuffer(id)) id = id.toString();
+  if (typeof id !== 'string' || !id) return undefined;
+  if (id.startsWith('"')) {
+    try {
+      return String(JSON.parse(id));
+    } catch {
+      return id;
+    }
+  }
+  return id;
+}
+
 /** Some driver errors (e.g. ECONNREFUSED wrapped in AggregateError) have an empty message. */
 function describeError(err: unknown): string {
   if (!(err instanceof Error)) return String(err);
@@ -162,7 +182,7 @@ export class RabbitMqConsumer implements OnApplicationBootstrap, OnModuleDestroy
 
   private async handle(channel: ConfirmChannel, msg: ConsumeMessage) {
     const receivedAt = new Date();
-    const messageId = msg.properties.messageId as string | undefined;
+    const messageId = eventId(msg);
     const retries = Number(msg.properties.headers?.[RETRY_COUNT_HEADER] ?? 0);
     const label = `${messageId ?? '(no messageId)'}${retries ? ` (retry ${retries})` : ''}${msg.fields.redelivered ? ' [redelivered]' : ''}`;
 
