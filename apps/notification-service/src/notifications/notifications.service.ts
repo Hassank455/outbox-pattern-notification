@@ -37,12 +37,9 @@ export class NotificationsService {
    * makes the second INSERT wait for the first transaction. If it commits, the second gets
    * "0 rows" (duplicate). If it rolls back, the second one goes ahead.
    *
-   * Caveat: here "sending" = storing a row, so it fits in the DB transaction. A REAL email/SMS
-   * call can't be rolled back. Options (not built here):
-   *   - commit first, then call the provider with an idempotency key (= messageId) so a repeat
-   *     call doesn't send twice (most email/SMS APIs support this), or
-   *   - write a "send email" row to a notification outbox in this same transaction and let a
-   *     separate worker do the call, the same pattern as orders-service.
+   * Stage 7: the real email is NOT sent in here (a provider call can't be rolled back). We
+   * also write an outbound_emails row (an email outbox) in this same transaction, and the
+   * EmailWorker sends it with an Idempotency-Key. See src/email/ and docs/07-email-outbox.md.
    */
   handleOrderCreated(event: OrderCreatedEvent, meta: MessageMeta): Promise<HandleResult> {
     return this.prisma.$transaction(async (tx) => {
@@ -60,13 +57,24 @@ export class NotificationsService {
       }
 
       const total = (event.totalCents / 100).toFixed(2);
-      await tx.notification.create({
-        data: {
-          orderId: event.orderId,
-          recipient: event.customerEmail,
-          subject: `Order confirmed: ${event.product}`,
-          body: `Thanks for your order of ${event.quantity} x ${event.product}. Total: $${total}.`,
-        },
+      const email = {
+        orderId: event.orderId,
+        recipient: event.customerEmail,
+        subject: `Order confirmed: ${event.product}`,
+        body: `Thanks for your order of ${event.quantity} x ${event.product}. Total: $${total}.`,
+      };
+      await tx.notification.create({ data: email });
+
+      // Stage 7: we do NOT call the email provider here. A real send can't be rolled back, so a
+      // crash between "send" and COMMIT would roll back the inbox row, and the retry would send
+      // the email again. Instead we store the email to send, in this same transaction (an email
+      // outbox). The EmailWorker sends it later.
+      // The idempotency key is built from the event id, so it is created once and is the same
+      // on every retry. skipDuplicates: the unique key is a second safety net (and keeps the
+      // Stage 5 "inbox disabled" experiment from failing on it).
+      await tx.outboundEmail.createMany({
+        data: [{ ...email, idempotencyKey: `order-confirmation:${meta.messageId}` }],
+        skipDuplicates: true,
       });
 
       if (Math.random() < this.simulatedFailureRate) {

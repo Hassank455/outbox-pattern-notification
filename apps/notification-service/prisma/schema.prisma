@@ -41,3 +41,37 @@ model ProcessedMessage {
 
   @@map("processed_messages")
 }
+
+// Stage 7: an outbox for EMAILS, inside notification-service.
+//
+// A real email can't be rolled back, so the consumer doesn't send it. Instead it writes this
+// row in the SAME transaction as the inbox row and the notification. A separate worker sends
+// PENDING rows to the email provider and marks them SENT. Same idea as orders-service's
+// outbox_messages + relay, one hop further down the line.
+enum EmailStatus {
+  PENDING // waiting to be sent (or waiting for its next retry)
+  SENT // the provider accepted it
+  FAILED // gave up: permanent provider error or too many attempts
+}
+
+model OutboundEmail {
+  id                String      @id @default(uuid()) @db.Uuid
+  // Sent to the provider as the Idempotency-Key header. Built from the AMQP messageId, so it
+  // is created ONCE (with the event) and stays the same on every retry. The unique constraint
+  // also means one event can never produce two email rows.
+  idempotencyKey    String      @unique @map("idempotency_key")
+  orderId           String      @map("order_id") @db.Uuid
+  recipient         String
+  subject           String
+  body              String
+  status            EmailStatus @default(PENDING)
+  attempts          Int         @default(0)
+  lastError         String?     @map("last_error")
+  nextAttemptAt     DateTime?   @map("next_attempt_at") // backoff: not before this time
+  providerMessageId String?     @map("provider_message_id") // the provider's id for the sent email
+  createdAt         DateTime    @default(now()) @map("created_at")
+  sentAt            DateTime?   @map("sent_at")
+
+  @@index([status, createdAt])
+  @@map("outbound_emails")
+}
