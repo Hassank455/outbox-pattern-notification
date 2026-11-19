@@ -18,7 +18,10 @@
     "relay": "npm run relay -w orders-service",
     "chaos": "node scripts/chaos.mjs",
     "trace": "node scripts/trace.mjs",
-    "latency": "node scripts/latency.mjs"
+    "latency": "node scripts/latency.mjs",
+    "dev:email-provider": "node tools/fake-email-provider.mjs",
+    "email-worker": "npm run email-worker -w notification-service",
+    "email-chaos": "node scripts/email-chaos.mjs"
   },
   "devDependencies": {
     "dotenv": "^16.6.1",

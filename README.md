@@ -52,12 +52,14 @@ All measured on a laptop with the scripts in this repo:
 | `kill -9` the relay mid-batch, 1000 orders (Stage 3 vs 4) | **1222** notifications (222 duplicates) | **1000** notifications (209 re-deliveries skipped) |
 | Chaos: 2000 orders, `kill -9` every 0.5s, RabbitMQ restart (Stage 5) | inbox off: **2423** notifications | inbox on: **2000** notifications |
 | Relay latency, order → notification p50 (Stage 6) | polling (1s): **610ms** | Debezium CDC: **77ms** · LISTEN/NOTIFY: **15ms** |
+| Email worker killed after send, before commit, 300 emails (Stage 7) | no key: **411** emails received (111 duplicates) | `Idempotency-Key`: **300** emails received (111 replays skipped) |
 
 ## Guarantees
 
 - ✅ No lost events: if the order exists, its event is eventually published
 - ✅ No phantom events: an event exists only if its order committed
 - ✅ Effectively-once processing: one notification per order, even with duplicate deliveries
+- ✅ One email per order, even if the email worker crashes after the provider accepted it
 - ✅ Survives crashes of any service, broker restarts and short database outages
 - ❌ Exactly-once *delivery*: duplicates happen; the inbox absorbs them
 - ❌ Global ordering across several relays
@@ -101,6 +103,8 @@ npm run trace -- <orderId>     # one order's journey across both databases
 npm run chaos                  # failure experiment with a PASS/FAIL report (stop dev:orders first)
 npm run latency                # compare relay modes (stop dev:orders first)
 npm run relay                  # an extra standalone relay (needs a build: npm run build)
+npm run dev:email-provider     # fake email provider on :3003 (Stage 7)
+npm run email-chaos            # crash the email worker mid-batch, count emails received (needs a build)
 ```
 
 Relay modes (`RELAY_MODE` in `apps/orders-service/.env`):
@@ -125,12 +129,13 @@ RELAY_MODE=none npm run dev:orders
 .
 ├── apps/
 │   ├── orders-service/          # :3001, owns orders_db: orders, outbox, relay
-│   └── notification-service/    # :3002, owns notifications_db: consumer, inbox
+│   └── notification-service/    # :3002, owns notifications_db: consumer, inbox, email outbox
 ├── docker-compose.yml           # Postgres (wal_level=logical) + RabbitMQ [+ Debezium, profile cdc]
 ├── docker/
 │   ├── postgres/init.sql        # creates notifications_db
 │   └── debezium/conf/           # Debezium Server config
-├── scripts/                     # chaos.mjs · trace.mjs · latency.mjs
+├── scripts/                     # chaos.mjs · trace.mjs · latency.mjs · email-chaos.mjs
+├── tools/                       # fake-email-provider.mjs
 └── docs/                        # one write-up per stage + diagram assets
 ```
 
@@ -149,6 +154,7 @@ Each stage is a commit plus a write-up with experiments and real numbers:
 | 4 | [Idempotent consumer](docs/04-idempotent-consumer.md) | Inbox table, ack after commit, retry queue, DLQ |
 | 5 | [Failure experiments](docs/05-failure-experiments.md) | Chaos script, invariants, a control run that fails |
 | 6 | [Alternative relays](docs/06-alternative-relays.md) | LISTEN/NOTIFY and Debezium CDC, measured and compared |
+| 7 | [Email outbox](docs/07-email-outbox.md) | Side effects outside the database: email outbox, worker, `Idempotency-Key` |
 
 ## What I learned
 
@@ -162,6 +168,8 @@ Each stage is a commit plus a write-up with experiments and real numbers:
 6. **Failures need a path, not a log line.** Poison messages go to the DLQ; transient errors get delayed retries.
 7. **Test the invariant under chaos, and prove the test can fail.** With the inbox off, the same check caught 423 duplicates.
 8. **The relay is swappable; the guarantees aren't.** NOTIFY and CDC cut latency a lot, but delivery stays at-least-once.
+9. **A rollback can't unsend an email.** External side effects go through their own outbox, and a stable
+   `Idempotency-Key` keeps the proof of "already sent" at the provider.
 
 ## References
 
